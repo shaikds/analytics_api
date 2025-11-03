@@ -1,22 +1,66 @@
-from fastapi import APIRouter, Depends, HTTPException
-from .models import EventCreateSchema, EventListSchema, EventModel, EventUpdateSchema, get_utc_now
+from audioop import avg
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, Query
+from .models import EventCreateSchema,EventBucketSchema, EventListSchema, EventModel, get_utc_now
 from api.db.config import DATABASE_URL
+from sqlalchemy import case, func
+from timescaledb.hyperfunctions import time_bucket
+from datetime import datetime, timedelta, timezone
 from api.db.session import get_session
 from sqlmodel import Session, select
 
 
 router = APIRouter()
+DEFAULT_LOOKUP_PAGES =  [
+        "/", "/about", "/pricing", "/contact", 
+        "/blog", "/products", "/login", "/signup",
+        "/dashboard", "/settings"
+    ]
 
-print(DATABASE_URL)
-@router.get("/", response_model=EventListSchema)
-def read_events(session: Session = Depends(get_session)) -> EventListSchema:
-    query = select(EventModel).order_by(EventModel.updated_at.desc()).limit(10)
-    results = session.exec(query).all()
+
+@router.get("/", response_model=List[EventBucketSchema])
+def read_events(
+    duration: str = Query(default="1 day"),
+    pages: List = Query(default=None),
+    session: Session = Depends(get_session)
+    ):
     
-    return {
-        "results": results,
-        "count": len(results)
-    }
+        bucket = time_bucket(duration, EventModel.time)
+        lookup_pages = pages if isinstance(pages, list) and len(pages) > 0 else DEFAULT_LOOKUP_PAGES
+        os_case = case(
+            (EventModel.user_agent.ilike('%windows%'), 'Windows'),
+            (EventModel.user_agent.ilike('%macintosh%'), 'MacOS'),
+            (EventModel.user_agent.ilike('%iphone%'), 'iOS'),
+            (EventModel.user_agent.ilike('%android%'), 'Android'),
+            (EventModel.user_agent.ilike('%linux%'), 'Linux'),
+            else_='Other'
+        ).label('operating_system')
+
+        query = (
+            select(
+                bucket.label('bucket'),
+                os_case,
+                EventModel.page.label('page'),
+                func.avg(EventModel.duration).label("avg_duration"),
+                func.count().label('count')
+            )
+            .where(
+                EventModel.page.in_(lookup_pages)
+            )
+            .group_by(
+                bucket,
+                os_case,
+                EventModel.page
+            )
+            .order_by(
+                bucket,
+                os_case,
+                EventModel.page
+            )
+        )
+
+        results = session.exec(query).all()
+        return results
 
 @router.get("/{event_id}", response_model=EventModel)
 def get_event(event_id: int, session: Session = Depends(get_session)):
@@ -40,24 +84,24 @@ def create_event(
      return obj
 
 
-@router.put("/{event_id}", response_model=EventModel)
-def update_event(
-    event_id: int,
-    payload: EventUpdateSchema,
-    session: Session = Depends(get_session)):
-    ##
-    query = select(EventModel).where(EventModel.id == event_id)
-    result = session.exec(query).first()
-    if not result:
-        raise HTTPException(status_code=404, detail="Event not found")
+# @router.put("/{event_id}", response_model=EventModel)
+# def update_event(
+#     event_id: int,
+#     payload: EventUpdateSchema,
+#     session: Session = Depends(get_session)):
+#     ##
+#     query = select(EventModel).where(EventModel.id == event_id)
+#     result = session.exec(query).first()
+#     if not result:
+#         raise HTTPException(status_code=404, detail="Event not found")
 
-    data = payload.model_dump()
-    for k, v in data.items():
-        setattr(result, k, v)
-    result.updated_at = get_utc_now()
+#     data = payload.model_dump()
+#     for k, v in data.items():
+#         setattr(result, k, v)
+#     result.updated_at = get_utc_now()
 
-    session.add(result)
-    session.commit()
-    session.refresh(result)
+#     session.add(result)
+#     session.commit()
+#     session.refresh(result)
 
-    return {"id": event_id}
+#     return {"id": event_id}
