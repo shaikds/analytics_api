@@ -1,7 +1,7 @@
 # Build an Analytics API using FastAPI + time series Postgres
 
 # Overview
-A microservice of analytics, which can be reused in any project.
+An analytics microservice, which can be reused in any project.
 
 ## TechStack
 - Docker
